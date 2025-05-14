@@ -36,19 +36,6 @@ class MusicLibrary:
         self.words = []
         self.spotify_connection = spotipy.Spotify(auth_manager=SpotifyOAuth(scope="playlist-read-private"))
 
-    def open_db_connection(self):
-        self.db_connection = psycopg2.connect(
-            dbname=os.environ['LOCAL_DB_DBNAME'],
-            user=os.environ['LOCAL_DB_USER'],
-            password=os.environ['LOCAL_DB_PASSWORD'],
-            host=os.environ['LOCAL_DB_HOST'], 
-            port=os.environ['LOCAL_DB_PORT'],
-        )
-        self.cursor = self.db_connection.cursor()
-
-    def close_db_connection(self):
-        self.db_connection.close()
-
     def create_uuid(self, **kwargs):
         input_string = ''
         namespace = uuid.NAMESPACE_DNS
@@ -562,7 +549,7 @@ class MusicLibrary:
         object_array = []
         for key, item in objects.items():
             object_instance = {'id': key}
-            if object_name == '':
+            if object_name == 'playlist_backlog':
                 object_instance['data'] = item
             else:
                 for field, value in item.items():
@@ -585,27 +572,22 @@ class MusicLibrary:
         return max_length
 
     def generate_create_table_statement(self, object_name):
-        if object_name == 'playlist_backlog':
-            statement = """DROP TABLE IF EXISTS playlist_backlog;\m"""
-            statement += """CREATE TABLE playlist_backlog (\n"""
-            statement += """\tid VARCHAR(33),"""
-            statement += """\tdata JSON"""
-            statement += """\n);"""
-        else:
-            df = self.get_object_dataframe(object_name)
-            statement = """DROP TABLE IF EXISTS """ + object_name + """;\n"""
-            statement += """CREATE TABLE """ + object_name + """ (\n"""
-            for column in df.columns:
-                if column != df.columns[0]:
-                    statement += """,\n"""
-                statement += """\t""" + column
-                if df[column].dtype == 'int64':
-                    statement += """ INTEGER"""
-                else:
-                    statement += """ VARCHAR("""
-                    statement += str(int(self.get_max_object_field_length(object_name, column) * 1.5))
-                    statement += """)"""
-            statement += """\n);"""
+        df = self.get_object_dataframe(object_name)
+        statement = """DROP TABLE IF EXISTS """ + object_name + """;\n"""
+        statement += """CREATE TABLE """ + object_name + """ (\n"""
+        for column in df.columns:
+            if column != df.columns[0]:
+                statement += """,\n"""
+            statement += """\t""" + column
+            if object_name == 'playlist_backlog' and column == 'data':
+                statement += """ JSON"""
+            elif df[column].dtype == 'int64':
+                statement += """ INTEGER"""
+            else:
+                statement += """ VARCHAR("""
+                statement += str(int(self.get_max_object_field_length(object_name, column) * 1.5))
+                statement += """)"""
+        statement += """\n);"""
         return statement
 
     def execute_database_statement(self, statement):
@@ -618,45 +600,6 @@ class MusicLibrary:
         except Exception as e:
             self.db_connection.rollback()
             print(e)
-        self.close_db_connection()
-        return success
-
-    def write_object_data_to_db(self, object_name):
-        success = False
-        df = self.get_object_dataframe(object_name)
-        self.open_db_connection()
-        
-        try:
-            for index, row in df.iterrows():
-                self.cursor.execute("""SELECT * FROM """ + object_name + """ WHERE id = %s;""", (str(row['id']), ))
-                results = self.cursor.fetchall()
-                if len(results) == 0:
-                    c = ''
-                    v = ''
-                    for col in df.columns:
-                        if row[col]:
-                            if v != '':
-                                v += ', '
-                                c += ', '
-                            c += col
-                            if type(row[col]) == str:
-                                if 'date' in col:
-                                    # still needs to debug year only edge case
-                                    v += "'" + row[col] + "'::DATE"
-                                else:
-                                    v += "'" + row[col].replace("'","") + "'"
-                            else:
-                                v += str(row[col])
-                    command = """INSERT INTO """ + object_name + """ (""" + c + """) VALUES (""" + v + """);"""
-                    self.cursor.execute(command)
-                    self.db_connection.commit()
-                    print('Command sent: ' + command)
-            success = True
-                    
-        except Exception as e:
-            self.db_connection.rollback()
-            print(e)
-
         self.close_db_connection()
         return success
 
@@ -714,6 +657,20 @@ class MusicLibrary:
             print(e)
         return success
 
+    def open_db_connection(self):
+        self.db_connection = psycopg2.connect(
+            dbname=os.environ['LOCAL_DB_DBNAME'],
+            user=os.environ['LOCAL_DB_USER'],
+            password=os.environ['LOCAL_DB_PASSWORD'],
+            host=os.environ['LOCAL_DB_HOST'], 
+            port=os.environ['LOCAL_DB_PORT'],
+        )
+        self.cursor = self.db_connection.cursor()
+
+    def close_db_connection(self):
+        self.cursor.close()
+        self.db_connection.close()
+
     def read_data_from_json(self):
         success = False
         try:
@@ -724,4 +681,79 @@ class MusicLibrary:
             success = self.write(metadata=data)
         except Exception as e:
             print(e)
+        return success
+    
+    def write_object_data_to_db(self, object_name):
+        success = False
+        df = self.get_object_dataframe(object_name)
+        self.open_db_connection()
+        
+        try:
+            for index, row in df.iterrows():
+                self.cursor.execute("""SELECT * FROM """ + object_name + """ WHERE id = %s;""", (str(row['id']), ))
+                results = self.cursor.fetchall()
+                if len(results) == 0:
+                    c = ''
+                    v = ''
+                    for col in df.columns:
+                        if row[col]:
+                            if v != '':
+                                v += ', '
+                                c += ', '
+                            c += col
+                            if type(row[col]) == str:
+                                if 'date' in col:
+                                    # still needs to debug year only edge case
+                                    v += "'" + row[col] + "'::DATE"
+                                else:
+                                    v += "'" + row[col].replace("'","") + "'"
+                            else:
+                                v += str(row[col])
+                    if object_name == 'playlist_backlog':
+                        self.cursor.execute("""INSERT INTO playlist_backlog (id, data) VALUES (%s, %s);""", (row['id'], json.dumps(row['data']), ))
+                    else:    
+                        command = """INSERT INTO """ + object_name + """ (""" + c + """) VALUES (""" + v + """);"""
+                        self.cursor.execute(command)
+                    self.db_connection.commit()
+            success = True
+                    
+        except Exception as e:
+            self.db_connection.rollback()
+            print(e)
+
+        self.close_db_connection()
+        return success
+
+    def read_object_data_from_db(self, object_name):
+        success = False
+        self.open_db_connection()
+
+        try:
+            command = """SELECT * FROM """ + object_name + """;"""
+            self.cursor.execute(command)
+            result = self.cursor.fetchall()
+            columns = [desc[0] for desc in self.cursor.description]
+            for row in result:
+                row_data = {}
+                for i, col_name in enumerate(columns):
+                    if col_name != 'id':
+                        row_data[col_name] = row[i]
+                self.data[object_name][row[columns.index('id')]] = row_data
+            success = True
+
+        except Exception as e:
+            self.db_connection.rollback()
+            print(e)
+
+        self.close_db_connection()
+        return success
+
+    def load_data_from_db(self):
+        success = False
+        errors = False
+        for object_name in self.data:
+            if self.read_object_data_from_db(object_name) == False:
+                errors = True
+        if errors == False:
+            success = True
         return success
