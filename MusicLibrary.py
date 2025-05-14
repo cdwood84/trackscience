@@ -544,65 +544,6 @@ class MusicLibrary:
 
         return success
 
-    def get_object_dataframe(self, object_name):
-        objects = self.get(object_name)
-        object_array = []
-        for key, item in objects.items():
-            object_instance = {'id': key}
-            if object_name == 'playlist_backlog':
-                object_instance['data'] = item
-            else:
-                for field, value in item.items():
-                    object_instance[field] = value
-            object_array.append(object_instance)
-        return pandas.DataFrame.from_records(object_array)
-
-    def get_max_object_field_length(self, object_name, field_name):
-        objects = self.get(object_name)
-        max_length = 0
-        if objects is not None and len(objects) >= 1:
-            for key, value in objects.items():
-                if field_name == 'id' and len(str(key)) > max_length:
-                        max_length = len(str(key))
-                elif field_name != 'id' and len(str(value[field_name])) > max_length:
-                        max_length = len(str(value[field_name]))
-        if max_length == 0:
-            # use a default value that can fit a date
-            max_length = 10
-        return max_length
-
-    def generate_create_table_statement(self, object_name):
-        df = self.get_object_dataframe(object_name)
-        statement = """DROP TABLE IF EXISTS """ + object_name + """;\n"""
-        statement += """CREATE TABLE """ + object_name + """ (\n"""
-        for column in df.columns:
-            if column != df.columns[0]:
-                statement += """,\n"""
-            statement += """\t""" + column
-            if object_name == 'playlist_backlog' and column == 'data':
-                statement += """ JSON"""
-            elif df[column].dtype == 'int64':
-                statement += """ INTEGER"""
-            else:
-                statement += """ VARCHAR("""
-                statement += str(int(self.get_max_object_field_length(object_name, column) * 1.5))
-                statement += """)"""
-        statement += """\n);"""
-        return statement
-
-    def execute_database_statement(self, statement):
-        success = False
-        self.open_db_connection()
-        try:
-            self.cursor.execute(statement)
-            self.db_connection.commit()
-            success = True
-        except Exception as e:
-            self.db_connection.rollback()
-            print(e)
-        self.close_db_connection()
-        return success
-
     def extract_words(self):
         success = False
     
@@ -683,69 +624,202 @@ class MusicLibrary:
             print(e)
         return success
     
-    def write_object_data_to_db(self, object_name):
-        success = False
+    def get_object_dataframe(self, object_name):
+        objects = self.get(object_name)
+        object_array = []
+        for key, item in objects.items():
+            object_instance = {'id': key}
+            if object_name == 'playlist_backlog':
+                object_instance['data'] = item
+            else:
+                for field, value in item.items():
+                    object_instance[field] = value
+            object_array.append(object_instance)
+        return pandas.DataFrame.from_records(object_array)
+
+    def get_max_object_field_length(self, object_name, field_name):
+        objects = self.get(object_name)
+        max_length = 0
+        if objects is not None and len(objects) >= 1:
+            for key, value in objects.items():
+                if field_name == 'id' and len(str(key)) > max_length:
+                        max_length = len(str(key))
+                elif field_name != 'id' and len(str(value[field_name])) > max_length:
+                        max_length = len(str(value[field_name]))
+        if max_length == 0:
+            # use a default value that can fit a date
+            max_length = 10
+        return max_length
+
+    def generate_create_table_statement(self, object_name):
         df = self.get_object_dataframe(object_name)
+        statement = """DROP TABLE IF EXISTS """ + object_name + """;\n"""
+        statement += """CREATE TABLE """ + object_name + """ (\n"""
+        for column in df.columns:
+            if column != df.columns[0]:
+                statement += """,\n"""
+            statement += """\t""" + column
+            if object_name == 'playlist_backlog' and column == 'data':
+                statement += """ JSON"""
+            elif df[column].dtype == 'int64':
+                statement += """ INTEGER"""
+            else:
+                statement += """ VARCHAR("""
+                statement += str(self.get_max_object_field_length(object_name, column))
+                statement += """)"""
+        statement += """\n);"""
+        return statement
+
+    def execute_database_statement(self, statement, *args):
+        query_data = {
+            'status': False, 
+            'result': None,
+            'columns': None,
+            'message': None,
+        }
         self.open_db_connection()
-        
         try:
-            for index, row in df.iterrows():
-                self.cursor.execute("""SELECT * FROM """ + object_name + """ WHERE id = %s;""", (str(row['id']), ))
-                results = self.cursor.fetchall()
-                if len(results) == 0:
-                    c = ''
-                    v = ''
-                    for col in df.columns:
-                        if row[col]:
-                            if v != '':
-                                v += ', '
-                                c += ', '
-                            c += col
-                            if type(row[col]) == str:
-                                if 'date' in col:
-                                    # still needs to debug year only edge case
-                                    v += "'" + row[col] + "'::DATE"
-                                else:
-                                    v += "'" + row[col].replace("'","") + "'"
-                            else:
-                                v += str(row[col])
-                    if object_name == 'playlist_backlog':
-                        self.cursor.execute("""INSERT INTO playlist_backlog (id, data) VALUES (%s, %s);""", (row['id'], json.dumps(row['data']), ))
-                    else:    
-                        command = """INSERT INTO """ + object_name + """ (""" + c + """) VALUES (""" + v + """);"""
-                        self.cursor.execute(command)
-                    self.db_connection.commit()
-            success = True
-                    
+            # revist this later for security
+            executed_statement = statement % args
+            print(f'Database statement: {executed_statement}')
+
+            self.cursor.execute(statement, args)
+            if "SELECT " in statement:
+                query_data['result'] = self.cursor.fetchall()
+                query_data['columns'] = [desc[0] for desc in self.cursor.description]
+            else:
+                query_data['message'] = str(self.cursor.rowcount) + ' row' 
+                if self.cursor.rowcount != 1:
+                    query_data['message'] += 's'
+                query_data['message'] += ' affected'
+                self.db_connection.commit()
+            query_data['status'] = True
         except Exception as e:
             self.db_connection.rollback()
             print(e)
-
         self.close_db_connection()
+        return query_data
+
+    def test_table_definition(self, object_name):
+        success = False
+        errors = False
+        test_statement = """
+                SELECT column_name, character_maximum_length
+                FROM information_schema.columns
+                WHERE table_name = %s;
+                """
+        test_args = (object_name)
+        test_query = self.execute_database_statement(test_statement, test_args)
+        if test_query['status'] is True and test_query['result'] is not None:
+            for col in test_query['result']:
+                col_name, char_max_len = col
+                if char_max_len is not None:
+                    if char_max_len < self.get_max_object_field_length(object_name, col_name):
+                        statement = self.generate_create_table_statement(object_name)
+                        query = self.execute_database_statement(statement)
+                        if query['status'] is False:
+                            errors = True
+                        break
+            if errors is False:
+                success = True
+        return success
+
+    def write_object_data_to_db(self, object_name):
+        success = False
+        if self.test_table_definition(object_name) is True:
+            id_statement = f"""SELECT id FROM {object_name}"""
+            id_query = self.execute_database_statement(id_statement)
+            id_list = list(map(lambda row: row[0], id_query['result']))
+            if id_query['status'] is True:
+                for key, item in self.data[object_name].items():
+                    if key not in id_list:
+                        c = 'id'
+                        v = "'" + key + "'"
+                        for field, value in item.items():
+                            if value is not None:
+                                c += ', ' + field
+                                if type(value) == str:
+                                    v += ", '" + value.replace("'","") + "'"
+                                else:
+                                    v += ', ' + str(value)
+                        if object_name == 'playlist_backlog':
+                            statement = """INSERT INTO playlist_backlog (id, data) VALUES (%s, %s);"""
+                            args = (key, json.dumps(item))
+                            query = self.execute_database_statement(statement, *args)
+                        else:
+                            statement = """INSERT INTO """ + object_name + """(""" + c + """) VALUES (""" + v + """);"""
+                            query = self.execute_database_statement(statement)
+                        if query['status'] is False:
+                            return False
+                    success = True
+            else:
+                success = False
         return success
 
     def read_object_data_from_db(self, object_name):
         success = False
-        self.open_db_connection()
-
-        try:
-            command = """SELECT * FROM """ + object_name + """;"""
-            self.cursor.execute(command)
-            result = self.cursor.fetchall()
-            columns = [desc[0] for desc in self.cursor.description]
-            for row in result:
-                row_data = {}
-                for i, col_name in enumerate(columns):
-                    if col_name != 'id':
-                        row_data[col_name] = row[i]
-                self.data[object_name][row[columns.index('id')]] = row_data
+        statement = """SELECT * FROM """ + object_name + """;"""
+        query = self.execute_database_statement(statement)
+        if query['status'] is True:
+            for row in query['results']:
+                if object_name == 'playlist_backlog':
+                    row_data = row[1]
+                else:
+                    row_data = {}
+                    for i, col_name in enumerate(query['columns']):
+                        if col_name != 'id':
+                            row_data[col_name] = row[i]
+                self.data[object_name][row[query['columns'].index('id')]] = row_data
             success = True
+        return success
 
-        except Exception as e:
-            self.db_connection.rollback()
-            print(e)
+    def delete_removed_objects_from_db(self, object_name):
+        success = False
+        if len(self.data[object_name]) == 0:
+            clear_statement = """DELETE FROM """ + object_name + """;"""
+            clear_query = self.execute_database_statement(clear_statement)
+            success = clear_query['status']
+        else:
+            id_statement = """SELECT id FROM """ + object_name + """;"""
+            id_query = self.execute_database_statement(id_statement)
+            if id_query['status'] is True:
+                success = True
+                for row in id_query['result']:
+                    if row[id_query['columns'].index('id')] not in self.data[object_name]:
+                        delete_statement = """DELETE FROM """ + object_name + """ WHERE id = '""" + row[0] + """';"""
+                        delete_query = self.execute_database_statement(delete_statement)
+                        if delete_query['status'] is False:
+                            success = False
+        return success
 
-        self.close_db_connection()
+    def generate_schema(self):
+        success = False
+        errors = False
+        for object_name in self.data:
+            statement = self.generate_create_table_statement(object_name)
+            if self.execute_database_statement(statement) == False:
+                errors = True
+        if errors == False:
+            success = True
+        return success
+
+    def save_data_to_db(self):
+        success = False
+        errors = False
+
+        # first write new data
+        for object_name in self.data:
+            if len(self.data[object_name]) >= 1:
+                if self.write_object_data_to_db(object_name) == False:
+                    errors = True
+
+        # second delete removed keys
+        for object_name in self.data:
+            if self.delete_removed_objects_from_db(object_name) == False:
+                errors = True
+
+        if errors == False:
+            success = True
         return success
 
     def load_data_from_db(self):
