@@ -3,7 +3,6 @@ import os
 import pandas
 import psycopg2
 import random
-import requests
 import spotipy
 import sys
 import traceback
@@ -36,6 +35,8 @@ class MusicLibrary:
         }
         self.words = []
         self.spotify_connection = spotipy.Spotify(auth_manager=SpotifyOAuth(scope="playlist-read-private"))
+
+    def open_db_connection(self):
         self.db_connection = psycopg2.connect(
             dbname=os.environ['LOCAL_DB_DBNAME'],
             user=os.environ['LOCAL_DB_USER'],
@@ -44,6 +45,9 @@ class MusicLibrary:
             port=os.environ['LOCAL_DB_PORT'],
         )
         self.cursor = self.db_connection.cursor()
+
+    def close_db_connection(self):
+        self.db_connection.close()
 
     def create_uuid(self, **kwargs):
         input_string = ''
@@ -558,22 +562,69 @@ class MusicLibrary:
         object_array = []
         for key, item in objects.items():
             object_instance = {'id': key}
-            for field, value in item.items():
-                object_instance[field] = value
+            if object_name == '':
+                object_instance['data'] = item
+            else:
+                for field, value in item.items():
+                    object_instance[field] = value
             object_array.append(object_instance)
         return pandas.DataFrame.from_records(object_array)
 
+    def get_max_object_field_length(self, object_name, field_name):
+        objects = self.get(object_name)
+        max_length = 0
+        if objects is not None and len(objects) >= 1:
+            for key, value in objects.items():
+                if field_name == 'id' and len(str(key)) > max_length:
+                        max_length = len(str(key))
+                elif field_name != 'id' and len(str(value[field_name])) > max_length:
+                        max_length = len(str(value[field_name]))
+        if max_length == 0:
+            # use a default value that can fit a date
+            max_length = 10
+        return max_length
+
     def generate_create_table_statement(self, object_name):
-        df = self.get_object_dataframe(object_name)
-        statement = """DROP TABLE """ + object_name + """ IF EXISTS; """
-        statement += """CREATE TABLE """ + object_name + """ ("""
-        for column in df.columns:
-            print(f"Column Name: {column}, Data Type: {df[column].dtype}")
-        statement += """);"""
+        if object_name == 'playlist_backlog':
+            statement = """DROP TABLE IF EXISTS playlist_backlog;\m"""
+            statement += """CREATE TABLE playlist_backlog (\n"""
+            statement += """\tid VARCHAR(33),"""
+            statement += """\tdata JSON"""
+            statement += """\n);"""
+        else:
+            df = self.get_object_dataframe(object_name)
+            statement = """DROP TABLE IF EXISTS """ + object_name + """;\n"""
+            statement += """CREATE TABLE """ + object_name + """ (\n"""
+            for column in df.columns:
+                if column != df.columns[0]:
+                    statement += """,\n"""
+                statement += """\t""" + column
+                if df[column].dtype == 'int64':
+                    statement += """ INTEGER"""
+                else:
+                    statement += """ VARCHAR("""
+                    statement += str(int(self.get_max_object_field_length(object_name, column) * 1.5))
+                    statement += """)"""
+            statement += """\n);"""
+        return statement
+
+    def execute_database_statement(self, statement):
+        success = False
+        self.open_db_connection()
+        try:
+            self.cursor.execute(statement)
+            self.db_connection.commit()
+            success = True
+        except Exception as e:
+            self.db_connection.rollback()
+            print(e)
+        self.close_db_connection()
+        return success
 
     def write_object_data_to_db(self, object_name):
         success = False
         df = self.get_object_dataframe(object_name)
+        self.open_db_connection()
         
         try:
             for index, row in df.iterrows():
@@ -603,8 +654,10 @@ class MusicLibrary:
             success = True
                     
         except Exception as e:
+            self.db_connection.rollback()
             print(e)
 
+        self.close_db_connection()
         return success
 
     def extract_words(self):
@@ -648,3 +701,27 @@ class MusicLibrary:
             traceback.print_exception(*sys.exc_info())
             time.sleep(2)
             return None
+        
+    def write_data_to_json(self):
+        success = False
+        try:
+            config_directory = os.getcwd() + '/../local/'
+            filepath = os.path.join(config_directory, "spotipy_data.json")
+            with open(filepath, 'w') as f:
+                json.dump(self.data, f, indent=4)
+            success = True
+        except Exception as e:
+            print(e)
+        return success
+
+    def read_data_from_json(self):
+        success = False
+        try:
+            config_directory = os.getcwd() + '/../local/'
+            filepath = os.path.join(config_directory, "spotipy_data.json")
+            with open(filepath, 'r') as file:
+                data = json.load(file)
+            success = self.write(metadata=data)
+        except Exception as e:
+            print(e)
+        return success
