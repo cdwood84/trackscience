@@ -436,17 +436,31 @@ class MusicLibrary:
             'url': value['external_urls']['spotify'],
             'total_tracks': value['tracks']['total'],
         }
+
+        # set limit
+        if value['tracks']['total'] > 100:
+            limit = 100
+        else:
+            limit = value['tracks']['total']
             
         # fetch playlist tracks to process
         try:
-            pt_fetch = self.spotify_connection.playlist_tracks(key, limit=value['tracks']['total'])
-            time.sleep(1)
+            n = 0
+            c = limit
             track_ids = []
             playlist_track_ids = []
-            for track_data in pt_fetch['items']:
-                track_ids.append(track_data['track']['id'])
-                pt_id = self.create_uuid(playlist=key, track=track_data['track']['id'])
-                playlist_track_ids.append(pt_id)
+            while c == limit:
+                pt_fetch = self.spotify_connection.playlist_tracks(key, limit=limit, offset=n*limit)
+                time.sleep(1)
+                i = 0
+                for track_data in pt_fetch['items']:
+                    track_ids.append(track_data['track']['id'])
+                    pt_id = self.create_uuid(playlist=key, track=track_data['track']['id'])
+                    playlist_track_ids.append(pt_id)
+                    i += 1
+                n += 1
+                c = i 
+            
         except Exception as e:
             print(e)
             time.sleep(2)
