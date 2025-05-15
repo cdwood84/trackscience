@@ -680,8 +680,8 @@ class MusicLibrary:
         self.open_db_connection()
         try:
             # revist this later for security
-            executed_statement = statement % args
-            print(f'Database statement: {executed_statement}')
+            # executed_statement = statement % args
+            # print(f'Database statement: {executed_statement}')
 
             self.cursor.execute(statement, args)
             if "SELECT " in statement:
