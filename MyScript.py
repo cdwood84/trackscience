@@ -39,12 +39,9 @@ def begin(method='any'):
     if method == 'backlog' or (method == 'any' and len(library.data['track']) == 0):
         print('Spotify Playlist Log: ' + str(library.load_playlist_backlog()))
     print()
-    return library
-
-def printer(library):
-    for object_name in library.data:
-        print(object_name + ': ' + str(len(library.data[object_name])))
+    print(library)
     print()
+    return library
 
 def backlog(library, n=1):
     p = 0
@@ -70,11 +67,11 @@ def end(library, method='all'):
 
 lib = begin('json')
 
-printer(lib)
-
-backlog(lib, 1)
+backlog(lib, 5)
 
 # print('Generating DB Schema: ' + str(lib.generate_schema()))
+
+# print(lib.get_random_track())
 
 end(lib, 'all')
 

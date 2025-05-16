@@ -36,6 +36,12 @@ class MusicLibrary:
         self.words = []
         self.spotify_connection = spotipy.Spotify(auth_manager=SpotifyOAuth(scope="playlist-read-private"))
 
+    def __str__(self):
+        string = 'Music Library Contents'
+        for key, value in self.data.items():
+           string += '\n ' + str(key) + ': ' + str(len(value))
+        return string
+
     def create_uuid(self, **kwargs):
         input_string = ''
         namespace = uuid.NAMESPACE_DNS
@@ -55,19 +61,38 @@ class MusicLibrary:
             print(e)
         return success
         
-    def get(self, object_name, key=None):
-        obj = None
-        if object_name in self.data:
-            obj = self.data[object_name]
-        else:
-            print('Error: named object does not exist')
-        if key is None:
-            return obj
-        elif key in obj:
-            return obj[key]
-        else:
-            return None
-
+    def get(self, object_name, **kwargs):
+        try:
+            if object_name in self.data:
+                objects = self.data[object_name]
+                if len(kwargs) == 0:
+                    return objects
+                elif 'key' in kwargs:
+                    return objects[kwargs['key']]
+                elif 'field_name' in kwargs and 'field_values' in kwargs:
+                    items = {}
+                    for id, item in objects.items():
+                        if kwargs['field_name'] == 'id' and id in kwargs['field_values']:
+                            items[id] = item
+                        elif kwargs['field_name'] != 'id' and item[kwargs['field_name']] in kwargs['field_values']:
+                            items[id] = item
+                    return items
+                elif 'field_name' in kwargs and 'field_value' in kwargs:
+                    items = {}
+                    for id, item in objects.items():
+                        if kwargs['field_name'] == 'id' and id == kwargs['field_value']:
+                            items[id] = item
+                        elif kwargs['field_name'] != 'id' and item[kwargs['field_name']] == kwargs['field_value']:
+                            items[id] = item
+                    return items
+                else:
+                    print('Error: Invalid keyword arguments')
+            else:
+                print('Error: named object does not exist')
+        except Exception as e:
+            traceback.print_exception(*sys.exc_info())
+        return None
+    
     def delete(self, object_name, key):
         success = False
         try:
@@ -82,7 +107,10 @@ class MusicLibrary:
 
     def check(self, object_name, key, instance=None):
         success = False
-        lib_instance = self.get(object_name, key)
+        if key in self.data[object_name]:
+            lib_instance = self.get(object_name, key=key)
+        else:
+            lib_instance = None
         if instance is not None and lib_instance is not None:
             if lib_instance == instance:
                 success = True
@@ -449,11 +477,13 @@ class MusicLibrary:
             c = limit
             track_ids = []
             playlist_track_ids = []
+            pt_data = []
             while c == limit:
                 pt_fetch = self.spotify_connection.playlist_tracks(key, limit=limit, offset=n*limit)
                 time.sleep(1)
                 i = 0
                 for track_data in pt_fetch['items']:
+                    pt_data.append(track_data)
                     track_ids.append(track_data['track']['id'])
                     pt_id = self.create_uuid(playlist=key, track=track_data['track']['id'])
                     playlist_track_ids.append(pt_id)
@@ -485,7 +515,7 @@ class MusicLibrary:
         # conditionally append metadata for writing
         if add_data is True:
             metadata['playlist'][key] = playlist_object
-            for track_data in pt_fetch['items']:
+            for track_data in pt_data:
                 pt_id = self.create_uuid(playlist=key, track=track_data['track']['id'])
                 pt_value = {
                     'playlist_id': key,
@@ -612,6 +642,18 @@ class MusicLibrary:
             print(e)
         return success
 
+    def read_data_from_json(self):
+        success = False
+        try:
+            config_directory = os.getcwd() + '/../local/'
+            filepath = os.path.join(config_directory, "spotipy_data.json")
+            with open(filepath, 'r') as file:
+                data = json.load(file)
+            success = self.write(metadata=data)
+        except Exception as e:
+            print(e)
+        return success
+    
     def open_db_connection(self):
         self.db_connection = psycopg2.connect(
             dbname=os.environ['LOCAL_DB_DBNAME'],
@@ -626,18 +668,6 @@ class MusicLibrary:
         self.cursor.close()
         self.db_connection.close()
 
-    def read_data_from_json(self):
-        success = False
-        try:
-            config_directory = os.getcwd() + '/../local/'
-            filepath = os.path.join(config_directory, "spotipy_data.json")
-            with open(filepath, 'r') as file:
-                data = json.load(file)
-            success = self.write(metadata=data)
-        except Exception as e:
-            print(e)
-        return success
-    
     def get_object_dataframe(self, object_name):
         objects = self.get(object_name)
         object_array = []
@@ -845,3 +875,15 @@ class MusicLibrary:
         if errors == False:
             success = True
         return success
+    
+    def get_object_field_value_list(self, objects, field_name):
+        value_list = []
+        try:
+            for key, value in objects.items():
+                if field_name == 'id':
+                    value_list.append(key)
+                else:
+                    value_list.append(value[field_name])
+        except Exception as e:
+            print(e)
+        return value_list
