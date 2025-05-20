@@ -805,7 +805,7 @@ class MusicLibrary:
         statement = """SELECT * FROM """ + object_name + """;"""
         query = self.execute_database_statement(statement)
         if query['status'] is True:
-            for row in query['results']:
+            for row in query['result']:
                 if object_name == 'playlist_backlog':
                     row_data = row[1]
                 else:
